@@ -238,6 +238,37 @@
   td.num{text-align:right;font-family:var(--mono);}
   tfoot td{font-weight:700;border-top:1.5px solid var(--ink);border-bottom:none;}
 
+  /* Receipt-style review list: collapsed to date / restaurant / amount, with
+     an arrow that expands each row to its full line-item breakdown. */
+  .receipt-table .receipt-arrow-col{width:30px;padding-right:0;}
+  .receipt-row{cursor:pointer;transition:background .12s;}
+  .receipt-row:hover{background:var(--card-2);}
+  .receipt-row td{padding-top:10px;padding-bottom:10px;}
+  .receipt-arrow-cell{padding-right:0 !important;}
+  .arrow-btn{
+    appearance:none;border:none;background:transparent;
+    color:var(--muted);cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+    width:22px;height:22px;border-radius:6px;padding:0;
+    transition:transform .18s ease, color .15s, background .15s;
+  }
+  .arrow-btn:hover{color:var(--orange);background:var(--accent-soft);}
+  .receipt-row.open .arrow-btn{transform:rotate(180deg);color:var(--orange);}
+  .receipt-detail-row td{padding:0;border-bottom:1px solid var(--line);}
+  .receipt-detail{
+    background:var(--card-2);
+    border-radius:8px;
+    margin:0 0 10px;
+    padding:12px 14px;
+    display:flex;flex-direction:column;gap:6px;
+  }
+  .receipt-detail-line{
+    display:flex;justify-content:space-between;gap:14px;
+    font-size:13px;color:var(--muted);
+  }
+  .receipt-detail-line .num{font-family:var(--mono);color:var(--ink);}
+  .receipt-detail-empty{color:var(--muted-2);font-style:italic;}
+
   .msg{
     border-radius:8px;
     padding:12px 14px;
@@ -1352,34 +1383,72 @@ function showPreview(entries, warnings){
   }
 
   const table = document.createElement('table');
-  table.innerHTML = `<thead><tr><th>Branch</th><th>Date</th><th>Detail</th><th>Gross</th></tr></thead>`;
+  table.className = 'receipt-table';
+  table.innerHTML = `<thead><tr><th class="receipt-arrow-col"></th><th>Date</th><th>Restaurant</th><th class="num">Amount</th></tr></thead>`;
   const tbody = document.createElement('tbody');
   let grand = 0;
-  entries.forEach(e => {
+  entries.forEach((e, idx) => {
     const gross = grossTotalOf(e);
     grand += gross;
-    const bits = [];
-    if (Object.keys(e.platformAmounts).length) bits.push(Object.keys(e.platformAmounts).join(', '));
-    if (e.cash>0) bits.push(`Cash ${fmt(e.cash)}`);
-    if (e.visa>0) bits.push(`Visa ${fmt(e.visa)}`);
-    if (e.tips>0) bits.push(`Tips ${fmt(e.tips)}`);
+
+    // ---- collapsed summary row: date, restaurant, amount, expand arrow ----
+    const tr = document.createElement('tr');
+    tr.className = 'receipt-row';
+    tr.setAttribute('data-idx', String(idx));
+    tr.innerHTML = `<td class="receipt-arrow-cell"><button type="button" class="arrow-btn" aria-expanded="false" aria-label="Show receipt details"><svg viewBox="0 0 20 20" width="14" height="14"><path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button></td><td>${displayDate(e.date)}</td><td>${esc(e.branch)}</td><td class="num">${fmt(gross)}</td>`;
+    tbody.appendChild(tr);
+
+    // ---- expanded detail row: full receipt breakdown, hidden until the arrow is clicked ----
+    const detailLines = [];
+    Object.keys(e.platformAmounts).forEach(p => {
+      detailLines.push([p, fmt(e.platformAmounts[p])]);
+    });
+    if (e.cash > 0) detailLines.push(['Cash', fmt(e.cash)]);
+    if (e.visa > 0) detailLines.push(['Visa', fmt(e.visa)]);
+    if (e.tips > 0) detailLines.push(['Credit Card Tips', fmt(e.tips)]);
     const newCredit = e.creditEvents.filter(ev=>ev.type==='new');
     const payments = e.creditEvents.filter(ev=>ev.type==='payment');
     const mealCash = e.creditEvents.filter(ev=>ev.type==='mealcash');
     const mealVisa = e.creditEvents.filter(ev=>ev.type==='mealvisa');
-    if (newCredit.length) bits.push(`+${newCredit.length} credit sale(s)`);
-    if (payments.length) bits.push(`${payments.length} payment(s) received`);
-    if (mealCash.length) bits.push(`${mealCash.length} Cash and Visa Meal Plan`);
-    if (mealVisa.length) bits.push(`${mealVisa.length} Payfort Meal Plan`);
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${esc(e.branch)}</td><td>${displayDate(e.date)}</td><td>${esc(bits.join(', '))}</td><td class="num">${fmt(gross)}</td>`;
-    tbody.appendChild(tr);
+    newCredit.forEach(ev => detailLines.push([`New credit sale — ${ev.name}`, fmt(ev.amount)]));
+    payments.forEach(ev => detailLines.push([`Payment received — ${ev.name}`, fmt(ev.amount)]));
+    mealCash.forEach(ev => detailLines.push([`Cash and Visa Meal Plan — ${ev.name}`, fmt(ev.amount)]));
+    mealVisa.forEach(ev => detailLines.push([`Payfort Meal Plan — ${ev.name}`, fmt(ev.amount)]));
+
+    const detailTr = document.createElement('tr');
+    detailTr.className = 'receipt-detail-row';
+    detailTr.setAttribute('data-idx', String(idx));
+    detailTr.hidden = true;
+    const detailTd = document.createElement('td');
+    detailTd.colSpan = 4;
+    if (detailLines.length){
+      detailTd.innerHTML = `<div class="receipt-detail">${detailLines.map(([label, val]) =>
+        `<div class="receipt-detail-line"><span>${esc(label)}</span><span class="num">${val}</span></div>`
+      ).join('')}</div>`;
+    } else {
+      detailTd.innerHTML = `<div class="receipt-detail"><div class="receipt-detail-line receipt-detail-empty"><span>No line-item detail for this entry.</span></div></div>`;
+    }
+    detailTr.appendChild(detailTd);
+    tbody.appendChild(detailTr);
   });
   table.appendChild(tbody);
   const tfoot = document.createElement('tfoot');
   tfoot.innerHTML = `<tr><td colspan="3">Grand total</td><td class="num">${fmt(round2(grand))}</td></tr>`;
   table.appendChild(tfoot);
   area.appendChild(table);
+
+  // Toggle a receipt row's detail on arrow click.
+  tbody.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.arrow-btn');
+    if (!btn) return;
+    const row = btn.closest('.receipt-row');
+    const idx = row.getAttribute('data-idx');
+    const detailRow = tbody.querySelector(`.receipt-detail-row[data-idx="${idx}"]`);
+    const open = detailRow.hidden === false;
+    detailRow.hidden = open;
+    btn.setAttribute('aria-expanded', String(!open));
+    row.classList.toggle('open', !open);
+  });
 
   const companies = [...new Set(entries.map(e => BRANCHES[e.branch].company))];
   const ok = document.createElement('div');
