@@ -284,6 +284,14 @@
   .note-dot.info{background:var(--ok);}
   .receipt-row.has-warn:hover{background:rgba(255,138,61,.08);}
 
+  /* Alternating row tint so a long list is easier to scan without losing your
+     place — every other entry (summary row + its detail row) gets a faint
+     purple wash instead of the flat card background. */
+  .receipt-row.stripe{background:rgba(149,75,255,.055);}
+  .receipt-row.stripe:hover{background:rgba(149,75,255,.11);}
+  .receipt-row.stripe.has-warn:hover{background:rgba(255,138,61,.1);}
+  .receipt-detail-row.stripe .receipt-detail{background:rgba(149,75,255,.09);}
+
   /* Top-of-page summary: one glance, can't be missed. */
   .summary-row{display:flex;gap:12px;margin-top:2px;}
   .summary-box{
@@ -1552,7 +1560,8 @@ function showPreview(entries, warnings){
     // A small dot on the arrow marks a row that has something worth checking,
     // so you don't have to expand every row to find the ones that need a look.
     const tr = document.createElement('tr');
-    tr.className = 'receipt-row' + (hasWarn ? ' has-warn' : hasInfo ? ' has-info' : '');
+    const stripe = idx % 2 === 1 ? ' stripe' : '';
+    tr.className = 'receipt-row' + stripe + (hasWarn ? ' has-warn' : hasInfo ? ' has-info' : '');
     tr.setAttribute('data-idx', String(idx));
     const dot = hasWarn ? '<span class="note-dot warn" title="Something was left out — check details"></span>'
       : hasInfo ? '<span class="note-dot info" title="A branch name was auto-matched — check details"></span>' : '';
@@ -1577,7 +1586,7 @@ function showPreview(entries, warnings){
     mealVisa.forEach(ev => detailLines.push([`Payfort Meal Plan — ${ev.name}`, fmt(ev.amount)]));
 
     const detailTr = document.createElement('tr');
-    detailTr.className = 'receipt-detail-row';
+    detailTr.className = 'receipt-detail-row' + stripe;
     detailTr.setAttribute('data-idx', String(idx));
     detailTr.hidden = true;
     const detailTd = document.createElement('td');
