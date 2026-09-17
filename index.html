@@ -284,6 +284,45 @@
   .note-dot.info{background:var(--ok);}
   .receipt-row.has-warn:hover{background:rgba(255,138,61,.08);}
 
+  /* Top-of-page summary: one glance, can't be missed. */
+  .summary-row{display:flex;gap:12px;margin-top:2px;}
+  .summary-box{
+    flex:1;
+    border-radius:10px;
+    padding:16px 16px 14px;
+    border:1px solid;
+    text-align:center;
+  }
+  .summary-box.ok{
+    background:rgba(52,211,153,.12);
+    border-color:rgba(52,211,153,.35);
+  }
+  .summary-box.error{
+    background:var(--error-soft);
+    border-color:rgba(255,49,137,.35);
+  }
+  .summary-box.error.zero{
+    background:rgba(52,211,153,.12);
+    border-color:rgba(52,211,153,.35);
+  }
+  .summary-num{
+    font-family:var(--mono);
+    font-size:26px;
+    font-weight:700;
+    line-height:1.1;
+  }
+  .summary-box.ok .summary-num{color:#34d399;}
+  .summary-box.error .summary-num{color:var(--error);}
+  .summary-box.error.zero .summary-num{color:#34d399;}
+  .summary-label{
+    font-size:12px;
+    color:var(--muted);
+    margin-top:4px;
+  }
+  .summary-box.clickable{cursor:pointer;transition:transform .1s,border-color .15s;}
+  .summary-box.clickable:hover{border-color:var(--error);transform:translateY(-1px);}
+  .summary-box.clickable:active{transform:translateY(0);}
+
   .msg{
     border-radius:8px;
     padding:12px 14px;
@@ -1428,18 +1467,6 @@ function showPreview(entries, warnings){
   card.style.display = 'block';
   area.innerHTML = '';
 
-  // These are sheet-level issues only (missing columns, a branch/date that couldn't
-  // be read at all, an entirely unconfirmed column like a stray "Instashop") — anything
-  // tied to one specific branch/day now lives inside that entry's own receipt below.
-  if (warnings.length){
-    [...new Set(warnings)].forEach(w => {
-      const div = document.createElement('div');
-      div.className = 'msg warn';
-      div.textContent = w;
-      area.appendChild(div);
-    });
-  }
-
   if (!entries.length){
     const div = document.createElement('div');
     div.className = 'msg error';
@@ -1447,6 +1474,50 @@ function showPreview(entries, warnings){
     area.appendChild(div);
     genCard.style.display = 'none';
     return;
+  }
+
+  // ---- top-of-page summary: one glance, can't be missed ----
+  // Green = entries that will actually generate a voucher pair. Red = things that
+  // were left out — no confirmed ledger, an unreadable date, an unconfirmed column
+  // like Instashop, etc. A branch name getting auto-matched to a known branch is
+  // NOT counted here — that's not a problem, just an FYI you can find in the row's
+  // own detail — otherwise the red count would fire on basically every normal file
+  // and you'd stop trusting it.
+  const readyEntries = entries.filter(e => {
+    const hasPlatform = Object.keys(e.platformAmounts).length > 0;
+    const hasCashVisa = e.cash > 0 || e.visa > 0;
+    const hasCredit = e.creditEvents.length > 0;
+    const hasTips = e.tips > 0;
+    return hasPlatform || hasCashVisa || hasCredit || hasTips;
+  });
+  const perEntryFlagCount = entries.reduce((sum, e) => sum + e.notes.filter(n => n.level === 'warn').length, 0);
+  const sheetWarnings = [...new Set(warnings)];
+  const flagCount = sheetWarnings.length + perEntryFlagCount;
+
+  const summary = document.createElement('div');
+  summary.className = 'summary-row';
+  summary.innerHTML = `
+    <div class="summary-box ok">
+      <div class="summary-num">${readyEntries.length}</div>
+      <div class="summary-label">${readyEntries.length===1?'entry':'entries'} ready to generate</div>
+    </div>
+    <div class="summary-box error${flagCount ? ' clickable' : ' zero'}" id="flagSummaryBox"${flagCount ? ' role="button" tabindex="0"' : ''}>
+      <div class="summary-num">${flagCount}</div>
+      <div class="summary-label">${flagCount===1?'thing':'things'} flagged${flagCount ? ' — click to review' : ''}</div>
+    </div>
+  `;
+  area.appendChild(summary);
+
+  // These are sheet-level issues only (missing columns, a branch/date that couldn't
+  // be read at all, an entirely unconfirmed column like a stray "Instashop") — anything
+  // tied to one specific branch/day now lives inside that entry's own receipt below.
+  if (sheetWarnings.length){
+    sheetWarnings.forEach(w => {
+      const div = document.createElement('div');
+      div.className = 'msg warn';
+      div.textContent = w;
+      area.appendChild(div);
+    });
   }
 
   const table = document.createElement('table');
@@ -1529,10 +1600,32 @@ function showPreview(entries, warnings){
     row.classList.toggle('open', !open);
   });
 
+  // Clicking the red "flagged" box expands every row that has something left out
+  // and jumps to the first one — no hunting through the list row by row.
+  if (flagCount){
+    const flagBox = document.getElementById('flagSummaryBox');
+    const jumpToFlags = () => {
+      let firstTarget = area.querySelector('.msg.warn');
+      tbody.querySelectorAll('.receipt-row.has-warn').forEach(row => {
+        const idx = row.getAttribute('data-idx');
+        const detailRow = tbody.querySelector(`.receipt-detail-row[data-idx="${idx}"]`);
+        detailRow.hidden = false;
+        row.classList.add('open');
+        row.querySelector('.arrow-btn').setAttribute('aria-expanded', 'true');
+        if (!firstTarget) firstTarget = row;
+      });
+      if (firstTarget) firstTarget.scrollIntoView({behavior:'smooth', block:'center'});
+    };
+    flagBox.addEventListener('click', jumpToFlags);
+    flagBox.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' '){ ev.preventDefault(); jumpToFlags(); }
+    });
+  }
+
   const companies = [...new Set(entries.map(e => BRANCHES[e.branch].company))];
   const ok = document.createElement('div');
   ok.className = 'msg ok';
-  ok.textContent = `${entries.length} voucher pair(s) ready to generate, across ${companies.length} compan${companies.length>1?'ies':'y'} (${companies.join(', ')}).`;
+  ok.textContent = `Across ${companies.length} compan${companies.length>1?'ies':'y'} (${companies.join(', ')}).`;
   area.appendChild(ok);
 
   genCard.style.display = 'block';
