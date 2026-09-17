@@ -539,6 +539,8 @@ function ddmmyyToTallyDate(s){
   let [d, m, y] = parts;
   if(y.length === 2) y = "20" + y;
   if(y.length !== 4) return null; // day/month accidentally in year position - bail rather than guess wrong
+  const dn = parseInt(d, 10), mn = parseInt(m, 10);
+  if(!Number.isFinite(dn) || !Number.isFinite(mn) || mn < 1 || mn > 12 || dn < 1 || dn > 31) return null; // not a real DD-MM-YY date - refuse rather than produce a bad Tally date
   return y + m.padStart(2,'0') + d.padStart(2,'0');
 }
 
@@ -757,27 +759,62 @@ document.getElementById('parseBtn').addEventListener('click', () => {
     // carried forward from the last row where it had a value. Vendor, Invoice
     // Number, Date, and Invoice Date also carry forward the same way, so a
     // multi-line invoice only needs everything typed once, on its first row.
-    const idx = {
-      entryNum: header.indexOf('petty cash entry #'),
-      voucherDate: (() => {
-        const exact = header.indexOf('date');
+    // Column finder — tolerant of a slightly different header than the exact
+    // template text (extra space, trailing punctuation, reordered columns),
+    // but never silently guesses: it tries exact match first, then "starts
+    // with", then "contains", and returns -1 (genuinely not found) only if
+    // none of those match anything.
+    function findCol(candidates){
+      for(const want of candidates){
+        const exact = header.indexOf(want);
         if(exact > -1) return exact;
-        const paymentDate = header.indexOf('payment date');
-        if(paymentDate > -1) return paymentDate;
-        return header.indexOf('payment');
-      })(),
-      invoiceDate: header.indexOf('invoice date'),
-      invoice: header.indexOf('invoice number'),
-      vendor: header.indexOf('vendor name'),
-      payAcct: header.indexOf('payment method'),
-      account: header.indexOf('category'),
-      desc: header.indexOf('item description'),
-      itemAmount: header.indexOf('item amount (aed)'),
-      discount: header.indexOf('discount (aed)'),
-      chooseToTotal: header.indexOf('choose to total'),
-      totalAmount: header.indexOf('total invoice amount (aed)'),
-      narration: header.indexOf('narration'),
+      }
+      for(const want of candidates){
+        const starts = header.findIndex(h => h.startsWith(want));
+        if(starts > -1) return starts;
+      }
+      for(const want of candidates){
+        const has = header.findIndex(h => h.includes(want));
+        if(has > -1) return has;
+      }
+      return -1;
+    }
+    const idx = {
+      entryNum: findCol(['petty cash entry #', 'entry #', 'entry number']),
+      voucherDate: findCol(['payment date', 'date']),
+      invoiceDate: findCol(['invoice date']),
+      invoice: findCol(['invoice number']),
+      vendor: findCol(['vendor name', 'vendor']),
+      payAcct: findCol(['payment method']),
+      account: findCol(['category']),
+      desc: findCol(['item description']),
+      itemAmount: findCol(['item amount (aed)', 'item amount']),
+      discount: findCol(['discount (aed)', 'discount']),
+      chooseToTotal: findCol(['choose to total']),
+      totalAmount: findCol(['total invoice amount (aed)', 'total invoice amount']),
+      narration: findCol(['narration']),
     };
+
+    // Hard stop instead of a silent wrong answer: if a column this format
+    // depends on for a correct voucher wasn't found at all, refuse to parse
+    // rather than quietly producing blank/wrong dates or amounts. This is
+    // the fix for the "worked at first, then silently broke" issue — a
+    // renamed or reordered header now shows a clear error immediately.
+    const requiredCols = {
+      'Payment Date': idx.voucherDate,
+      'Invoice Date': idx.invoiceDate,
+      'Vendor Name': idx.vendor,
+      'Category': idx.account,
+      'Item Description': idx.desc,
+      'Item Amount (AED)': idx.itemAmount,
+      'Total Invoice Amount (AED)': idx.totalAmount,
+    };
+    const missingCols = Object.entries(requiredCols).filter(([,i]) => i === -1).map(([name]) => name);
+    if(missingCols.length){
+      statusEl.textContent = `Stopped — couldn't find these columns in your header row: ${missingCols.join(', ')}. Check the header matches the template (nothing was parsed).`;
+      return;
+    }
+
     let carry = { entryNum: '', vendor: '', invoice: '', voucherDate: '', invoiceDate: '', payAcct: '' };
     for(let i=1;i<rows.length;i++){
       const r = rows[i];
@@ -896,12 +933,19 @@ function renderPreview(){
   }
 
   let unknownCats = new Set();
+  let badDateEntries = [];
   const byPaymentLedger = new Map(); // "ledger||date" -> { ledgerName, dateDisplay, total, invoices: [] }
 
   parsedEntries.forEach((entry, i) => {
     const gross = entry.lines.reduce((s,l) => s + l.amount, 0);
     const effectiveVoucherDate = (isLifterLife && lifterLifeEntryDate) ? lifterLifeEntryDate : entry.voucherDate;
-    const dateDisplay = (isLifterLife && lifterLifeEntryDateDisplay) ? lifterLifeEntryDateDisplay : (entry.voucherDateDisplay || entry.dateDisplay);
+    // No silent fallback: if the Payment/Receipt date didn't parse (missing
+    // cell, or text that isn't a recognizable date), flag it loudly instead
+    // of quietly showing the Invoice Date in its place.
+    const voucherDateOk = isLifterLife ? !!lifterLifeEntryDate : !!entry.voucherDate;
+    if(!voucherDateOk) badDateEntries.push(entry.num);
+    const dateDisplay = (isLifterLife && lifterLifeEntryDateDisplay) ? lifterLifeEntryDateDisplay
+      : (voucherDateOk ? (entry.voucherDateDisplay || entry.dateDisplay) : '⚠ missing/unrecognized');
     const groupKey = entry.paymentAccount + '||' + effectiveVoucherDate;
     if(!byPaymentLedger.has(groupKey)){
       byPaymentLedger.set(groupKey, { ledgerName: entry.paymentAccount, dateDisplay, total: 0, invoices: [] });
@@ -943,7 +987,9 @@ function renderPreview(){
     listEl.appendChild(div);
   });
 
-  if(unknownCats.size){
+  if(badDateEntries.length){
+    warnEl.innerHTML = `<div class="banner warn"><span>⚠️</span><span><b>Payment date missing or unrecognized on entr${badDateEntries.length>1?'ies':'y'} #${badDateEntries.map(n=>escXml(String(n))).join(', #')}.</b> Nothing was substituted — fix the date cell(s) in your source and re-paste before downloading, or this voucher's date will be wrong or blank in Tally.</span></div>`;
+  } else if(unknownCats.size){
     warnEl.innerHTML = `<div class="banner warn"><span>⚠️</span><span><b>${unknownCats.size} category name${unknownCats.size>1?'s':''} not found</b> in the known chart of accounts: ${[...unknownCats].map(c=>escXml(c)).join(', ')}. Double-check spelling against Tally before importing — a mismatch here is what causes "Referenced master is missing" errors.</span></div>`;
   } else {
     warnEl.innerHTML = `
