@@ -907,7 +907,7 @@ document.querySelectorAll('.tab').forEach(tab => {
 const VAT_RATE = 0.05;
 const SALES_VNO_START = 200001;
 const JOURNAL_VNO_START = 210001;
-const PLATFORM_KEYS = ["Deliveroo","Talabat","Careem","Noon","Keeta","Smile","TDH","Eateasy","Payfort"];
+const PLATFORM_KEYS = ["Deliveroo","Talabat","Careem","Noon","Keeta","Smile","TDH","Eateasy","Payfort","InstaShop"];
 
 const LL = "Lifter Life Healthy Restaurant LLC";
 const ARZ = "Arz Lebanon Restaurant LLC";
@@ -1109,7 +1109,11 @@ const DEFAULT_BRANCHES = {
       Keeta:     {sales:"Keeta - Jumeirah",   journal:"Keeta Branch Arz Jumeirah (Rec)"},
       Noon:      {sales:"Noon Jumeirah",      journal:"Noon Branch Arz Jumeirah (Rec)"},
       Eateasy:   {sales:"Eateasy Jumeirah",   journal:"Eateasily Branch Arz Jumeirah (Rec)"},
-      Smile:     {sales:"Eateasy Jumeirah",   journal:"Eateasily Branch Arz Jumeirah (Rec)"}
+      Smile:     {sales:"Eateasy Jumeirah",   journal:"Eateasily Branch Arz Jumeirah (Rec)"},
+      // Confirmed 2026-09-17 (Ahmad): strictly this branch — flagged (not silently
+      // included) if it ever shows up for any other branch, per the generic
+      // unconfirmed-column guard.
+      InstaShop: {sales:"InstaShop DMCC  (Pay)", journal:"InstaShop Branch Jumeirah  (Rec)"}
     },
     directOrder: {
       salesLedger: "Direct Orders Jumeirah",
