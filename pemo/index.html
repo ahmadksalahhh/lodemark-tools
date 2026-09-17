@@ -349,6 +349,28 @@
     background:var(--teal-bg);
   }
   .dropzone.loaded .dropzone-inner{ color:#1F4E42; }
+
+  /* Click ripple — a small colored burst wherever you click on the page */
+  .click-ripple{
+    position:fixed;
+    left:0; top:0;
+    width:14px; height:14px;
+    margin-left:-7px; margin-top:-7px;
+    border-radius:50%;
+    pointer-events:none;
+    z-index:9999;
+    background:radial-gradient(circle, var(--rc, var(--teal)) 0%, transparent 70%);
+    opacity:.55;
+    transform:scale(0);
+    animation:clickRippleAnim .6s ease-out forwards;
+  }
+  @keyframes clickRippleAnim{
+    0%{ transform:scale(0); opacity:.55; }
+    100%{ transform:scale(11); opacity:0; }
+  }
+  @media (prefers-reduced-motion: reduce){
+    .click-ripple{ animation:none; display:none; }
+  }
 </style>
 </head>
 <body>
@@ -1242,6 +1264,23 @@ document.getElementById('startOverBtn').addEventListener('click', () => {
   document.getElementById('downloadCard').classList.add('hidden');
   document.getElementById('parseStatus').textContent = '';
 });
+
+// Click ripple — a small colored burst wherever you click, anywhere on the page
+(function(){
+  const colors = ['#2F6F5E', '#B5602A', '#9C7A28'];
+  let i = 0;
+  document.addEventListener('click', (e) => {
+    const dot = document.createElement('div');
+    dot.className = 'click-ripple';
+    dot.style.setProperty('--rc', colors[i % colors.length]);
+    i++;
+    dot.style.left = e.clientX + 'px';
+    dot.style.top = e.clientY + 'px';
+    document.body.appendChild(dot);
+    dot.addEventListener('animationend', () => dot.remove());
+    setTimeout(() => dot.remove(), 900);
+  }, true);
+})();
 </script>
 </body>
 </html>
