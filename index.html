@@ -268,6 +268,21 @@
   }
   .receipt-detail-line .num{font-family:var(--mono);color:var(--ink);}
   .receipt-detail-empty{color:var(--muted-2);font-style:italic;}
+  .receipt-note{
+    font-size:12.5px;line-height:1.5;
+    padding:7px 10px;border-radius:6px;margin-bottom:6px;
+  }
+  .receipt-note.warn{background:var(--warn-soft);color:var(--warn);}
+  .receipt-note.info{background:var(--ok-soft);color:var(--ok);}
+  .arrow-btn{position:relative;}
+  .note-dot{
+    position:absolute;top:-2px;right:-2px;
+    width:7px;height:7px;border-radius:50%;
+    border:1.5px solid var(--card);
+  }
+  .note-dot.warn{background:var(--warn);}
+  .note-dot.info{background:var(--ok);}
+  .receipt-row.has-warn:hover{background:rgba(255,138,61,.08);}
 
   .msg{
     border-radius:8px;
@@ -1163,8 +1178,21 @@ function sheetToRows(wb, name){
 // Merge/lookup key for combining Tab1 + Tab2 rows for the same branch+day
 function combinedGet(map, branch, date){
   const key = branch + '|' + dateKey(date);
-  if (!map[key]) map[key] = {branch, date, platformAmounts:{}, cash:0, visa:0, tips:0, creditEvents:[]};
+  if (!map[key]) map[key] = {branch, date, platformAmounts:{}, cash:0, visa:0, tips:0, creditEvents:[], notes:[]};
   return map[key];
+}
+
+// Attaches a note to a specific entry's receipt instead of the flat top-of-page
+// warning list, so "matched X to Y" / "left out" messages sit inside the branch+day
+// they actually belong to. level 'warn' = something was excluded, check it;
+// level 'info' = an alias match that's probably fine but worth a glance. Deduped
+// per entry so repeated identical rows (e.g. 7 rows all matching the same alias)
+// don't produce 7 copies of the same note.
+function addNote(entry, text, level){
+  level = level || 'warn';
+  if (!entry.notes.some(n => n.text === text && n.level === level)){
+    entry.notes.push({text, level});
+  }
 }
 
 function processWorkbook(wb){
@@ -1191,7 +1219,11 @@ function processWorkbook(wb){
     const hasCashVisa = e.cash > 0 || e.visa > 0;
     const hasCredit = e.creditEvents.length > 0;
     const hasTips = e.tips > 0;
-    return hasPlatform || hasCashVisa || hasCredit || hasTips;
+    const hasNotes = e.notes.length > 0;
+    // Keep an entry even if every amount for it was excluded, as long as it has a
+    // note explaining why — otherwise the warning vanishes along with the entry
+    // and never reaches the review screen.
+    return hasPlatform || hasCashVisa || hasCredit || hasTips || hasNotes;
   });
   entries.sort((a,b) => a.branch.localeCompare(b.branch) || a.date - b.date);
 
@@ -1219,6 +1251,22 @@ function parsePlatformSalesRows(rows, entryMap){
     if (mealIdx > -1) platIdx.Payfort = mealIdx;
   }
 
+  // Any column that isn't Branch/Date/a recognized platform (e.g. "Instashop",
+  // "Quick Pickup", a stray "Direct Order" on this sheet) has no confirmed ledger
+  // anywhere, per the safety rule: never include an unconfirmed column silently.
+  // Flag it once, sheet-wide, if it actually carries any nonzero amount.
+  const knownIdx = new Set([branchIdx, dateIdx, ...Object.values(platIdx)]);
+  headers.forEach((h, i) => {
+    if (!h || knownIdx.has(i)) return;
+    for (let r=1; r<rows.length; r++){
+      const v = parseFloat((rows[r]||[])[i]);
+      if (v && v>0){
+        parseWarnings.push(`Platform Sales sheet: column "${h}" has no confirmed ledger on any branch — every amount in this column was left out entirely. Confirm the ledger with Ahmad before including it.`);
+        break;
+      }
+    }
+  });
+
   for (let r=1; r<rows.length; r++){
     const row = rows[r];
     if (!row || row.every(c => c===undefined || c==='')) continue;
@@ -1230,20 +1278,20 @@ function parsePlatformSalesRows(rows, entryMap){
       parseWarnings.push(`Platform Sales row ${r+1}: unrecognized branch "${branchRaw}" — no close match found, skipped.`);
       continue;
     }
-    if (branch.toLowerCase() !== String(branchRaw).trim().toLowerCase()){
-      parseWarnings.push(`Platform Sales row ${r+1}: matched "${branchRaw}" to "${branch}" — check this is right.`);
-    }
     const date = parseDate(dateRaw);
     if (!date){ parseWarnings.push(`Platform Sales row ${r+1}: could not read date "${dateRaw}" — skipped.`); continue; }
     const cfg = BRANCHES[branch];
     const entry = combinedGet(entryMap, branch, date);
+    if (branch.toLowerCase() !== String(branchRaw).trim().toLowerCase()){
+      addNote(entry, `Matched "${branchRaw}" to "${branch}" — check this is right.`, 'info');
+    }
     Object.keys(platIdx).forEach(p => {
       const v = parseFloat(row[platIdx[p]]);
       if (v && v>0){
         if (cfg.platforms && cfg.platforms[p]){
           entry.platformAmounts[p] = round2((entry.platformAmounts[p]||0) + v);
         } else {
-          parseWarnings.push(`Row ${r+1} (${branch}, ${displayDate(date)}): platform "${p}" has no confirmed ledger for this branch — left out.`);
+          addNote(entry, `Platform "${p}" has no confirmed ledger for this branch — left out.`);
         }
       }
     });
@@ -1261,6 +1309,20 @@ function parseCashCreditRows(rows, entryMap){
     parseWarnings.push(`Cash Visa Tips Credit sheet: missing column(s) ${missing.join(', ')} — sheet skipped.`);
     return;
   }
+  // Same unconfirmed-column guard as the Platform Sales sheet — flag any extra
+  // column (e.g. "Instashop", "Quick Pickup") that carries real amounts instead
+  // of silently ignoring it.
+  const knownCols = new Set([...need, 'Cash and Visa Meal Plan', 'Payfort Meal Plan']);
+  headers.forEach((h, i) => {
+    if (!h || knownCols.has(h)) return;
+    for (let r=1; r<rows.length; r++){
+      const v = parseFloat((rows[r]||[])[i]);
+      if (v && v>0){
+        parseWarnings.push(`Cash Visa Tips Credit sheet: column "${h}" has no confirmed ledger on any branch — every amount in this column was left out entirely. Confirm the ledger with Ahmad before including it.`);
+        break;
+      }
+    }
+  });
   for (let r=1; r<rows.length; r++){
     const row = rows[r];
     if (!row || row.every(c => c===undefined || c==='')) continue;
@@ -1272,32 +1334,34 @@ function parseCashCreditRows(rows, entryMap){
       parseWarnings.push(`Cash/Visa/Credit row ${r+1}: unrecognized branch "${branchRaw}" — no close match found, skipped.`);
       continue;
     }
-    if (branch.toLowerCase() !== String(branchRaw).trim().toLowerCase()){
-      parseWarnings.push(`Cash/Visa/Credit row ${r+1}: matched "${branchRaw}" to "${branch}" — check this is right.`);
-    }
-    const cfg = BRANCHES[branch];
-    if (!cfg.directOrder){
-      parseWarnings.push(`Cash/Visa/Credit row ${r+1} (${branch}): this branch has no confirmed Cash/Visa structure — row skipped.`);
-      continue;
-    }
     const date = parseDate(dateRaw);
     if (!date){ parseWarnings.push(`Cash/Visa/Credit row ${r+1}: could not read date "${dateRaw}" — skipped.`); continue; }
+    const cfg = BRANCHES[branch];
     const entry = combinedGet(entryMap, branch, date);
+    if (branch.toLowerCase() !== String(branchRaw).trim().toLowerCase()){
+      addNote(entry, `Matched "${branchRaw}" to "${branch}" — check this is right.`, 'info');
+    }
+    if (!cfg.directOrder){
+      addNote(entry, `This branch has no confirmed Cash/Visa structure — Cash/Visa/Credit data on this row was left out.`);
+      continue;
+    }
 
     const cash = parseFloat(row[idx['Cash']]);
     const visa = parseFloat(row[idx['Visa']]);
     const tips = parseFloat(row[idx['Credit Card Tips']]);
     if (cash && cash>0){
-      if (entry.cash>0 && entry.cash!==round2(cash)) parseWarnings.push(`Row ${r+1} (${branch}, ${displayDate(date)}): conflicting Cash values on repeated rows — using ${entry.cash}, ignored ${round2(cash)}.`);
+      if (!cfg.directOrder.journalCash){ addNote(entry, `Cash amount entered but this branch has no confirmed Cash ledger — left out.`); }
+      else if (entry.cash>0 && entry.cash!==round2(cash)) addNote(entry, `Conflicting Cash values on repeated rows — using ${entry.cash}, ignored ${round2(cash)}.`);
       else entry.cash = round2(cash);
     }
     if (visa && visa>0){
-      if (entry.visa>0 && entry.visa!==round2(visa)) parseWarnings.push(`Row ${r+1} (${branch}, ${displayDate(date)}): conflicting Visa values on repeated rows — using ${entry.visa}, ignored ${round2(visa)}.`);
+      if (!cfg.directOrder.journalVisa){ addNote(entry, `Visa amount entered but this branch has no confirmed Visa/Network ledger — left out.`); }
+      else if (entry.visa>0 && entry.visa!==round2(visa)) addNote(entry, `Conflicting Visa values on repeated rows — using ${entry.visa}, ignored ${round2(visa)}.`);
       else entry.visa = round2(visa);
     }
     if (tips && tips>0){
-      if (!cfg.tips){ parseWarnings.push(`Row ${r+1} (${branch}, ${displayDate(date)}): tips entered but this branch has no confirmed Credit Card Tips ledger — left out.`); }
-      else if (entry.tips>0 && entry.tips!==round2(tips)) parseWarnings.push(`Row ${r+1} (${branch}, ${displayDate(date)}): conflicting Tips values on repeated rows — using ${entry.tips}, ignored ${round2(tips)}.`);
+      if (!cfg.tips){ addNote(entry, `Tips entered but this branch has no confirmed Credit Card Tips ledger — left out.`); }
+      else if (entry.tips>0 && entry.tips!==round2(tips)) addNote(entry, `Conflicting Tips values on repeated rows — using ${entry.tips}, ignored ${round2(tips)}.`);
       else entry.tips = round2(tips);
     }
 
@@ -1310,16 +1374,16 @@ function parseCashCreditRows(rows, entryMap){
       || ('Payfort Meal Plan' in idx && parseFloat(row[idx['Payfort Meal Plan']]) > 0);
     if (entryType && custName && amt && amt>0){
       if (!cfg.creditSales){
-        parseWarnings.push(`Row ${r+1} (${branch}, ${displayDate(date)}): named-credit entry given but this branch has no confirmed credit ledger — left out.`);
+        addNote(entry, `Named-credit entry given but this branch has no confirmed credit ledger — left out.`);
       } else if (entryType === 'New Credit Sale'){
         entry.creditEvents.push({type:'new', name:custName, amount:round2(amt)});
       } else if (entryType === 'Payment Received (Visa)'){
         entry.creditEvents.push({type:'payment', name:custName, amount:round2(amt)});
       } else {
-        parseWarnings.push(`Row ${r+1} (${branch}, ${displayDate(date)}): unrecognized Entry Type "${entryType}" — row left out.`);
+        addNote(entry, `Unrecognized Entry Type "${entryType}" — row left out.`);
       }
     } else if ((entryType || amt) && !rowHasMealPlanAmount){
-      parseWarnings.push(`Row ${r+1} (${branch}, ${displayDate(date)}): incomplete credit entry (need Entry Type + Name + Amount together) — left out.`);
+      addNote(entry, `Incomplete credit entry (need Entry Type + Name + Amount together) — left out.`);
     }
 
     // "Cash and Visa Meal Plan" / "Payfort Meal Plan" — dedicated columns, always need a name, separate from Entry Type.
@@ -1331,9 +1395,9 @@ function parseCashCreditRows(rows, entryMap){
     const payfortMealPlan = hasPayfortCols ? parseFloat(row[idx['Payfort Meal Plan']]) : NaN;
     if (hasPayfortCols && ((cashVisaMealPlan && cashVisaMealPlan>0) || (payfortMealPlan && payfortMealPlan>0))){
       if (!cfg.platforms || !cfg.platforms.Payfort){
-        parseWarnings.push(`Row ${r+1} (${branch}, ${displayDate(date)}): Meal Plan entered but this branch has no confirmed Payfort/Mashreq ledger — left out.`);
+        addNote(entry, `Meal Plan entered but this branch has no confirmed Payfort/Mashreq ledger — left out.`);
       } else if (!custName){
-        parseWarnings.push(`Row ${r+1} (${branch}, ${displayDate(date)}): Meal Plan entered without a Customer/Company Name — left out.`);
+        addNote(entry, `Meal Plan entered without a Customer/Company Name — left out.`);
       } else {
         if (cashVisaMealPlan && cashVisaMealPlan>0) entry.creditEvents.push({type:'mealcash', name:custName, amount:round2(cashVisaMealPlan)});
         if (payfortMealPlan && payfortMealPlan>0) entry.creditEvents.push({type:'mealvisa', name:custName, amount:round2(payfortMealPlan)});
@@ -1364,8 +1428,11 @@ function showPreview(entries, warnings){
   card.style.display = 'block';
   area.innerHTML = '';
 
+  // These are sheet-level issues only (missing columns, a branch/date that couldn't
+  // be read at all, an entirely unconfirmed column like a stray "Instashop") — anything
+  // tied to one specific branch/day now lives inside that entry's own receipt below.
   if (warnings.length){
-    warnings.forEach(w => {
+    [...new Set(warnings)].forEach(w => {
       const div = document.createElement('div');
       div.className = 'msg warn';
       div.textContent = w;
@@ -1390,15 +1457,21 @@ function showPreview(entries, warnings){
   entries.forEach((e, idx) => {
     const gross = grossTotalOf(e);
     grand += gross;
+    const hasWarn = e.notes.some(n => n.level === 'warn');
+    const hasInfo = !hasWarn && e.notes.some(n => n.level === 'info');
 
     // ---- collapsed summary row: date, restaurant, amount, expand arrow ----
+    // A small dot on the arrow marks a row that has something worth checking,
+    // so you don't have to expand every row to find the ones that need a look.
     const tr = document.createElement('tr');
-    tr.className = 'receipt-row';
+    tr.className = 'receipt-row' + (hasWarn ? ' has-warn' : hasInfo ? ' has-info' : '');
     tr.setAttribute('data-idx', String(idx));
-    tr.innerHTML = `<td class="receipt-arrow-cell"><button type="button" class="arrow-btn" aria-expanded="false" aria-label="Show receipt details"><svg viewBox="0 0 20 20" width="14" height="14"><path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button></td><td>${displayDate(e.date)}</td><td>${esc(e.branch)}</td><td class="num">${fmt(gross)}</td>`;
+    const dot = hasWarn ? '<span class="note-dot warn" title="Something was left out — check details"></span>'
+      : hasInfo ? '<span class="note-dot info" title="A branch name was auto-matched — check details"></span>' : '';
+    tr.innerHTML = `<td class="receipt-arrow-cell"><button type="button" class="arrow-btn" aria-expanded="false" aria-label="Show receipt details">${dot}<svg viewBox="0 0 20 20" width="14" height="14"><path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button></td><td>${displayDate(e.date)}</td><td>${esc(e.branch)}</td><td class="num">${fmt(gross)}</td>`;
     tbody.appendChild(tr);
 
-    // ---- expanded detail row: full receipt breakdown, hidden until the arrow is clicked ----
+    // ---- expanded detail row: notes (matched/left-out) + full receipt breakdown ----
     const detailLines = [];
     Object.keys(e.platformAmounts).forEach(p => {
       detailLines.push([p, fmt(e.platformAmounts[p])]);
@@ -1421,13 +1494,19 @@ function showPreview(entries, warnings){
     detailTr.hidden = true;
     const detailTd = document.createElement('td');
     detailTd.colSpan = 4;
-    if (detailLines.length){
-      detailTd.innerHTML = `<div class="receipt-detail">${detailLines.map(([label, val]) =>
-        `<div class="receipt-detail-line"><span>${esc(label)}</span><span class="num">${val}</span></div>`
-      ).join('')}</div>`;
-    } else {
-      detailTd.innerHTML = `<div class="receipt-detail"><div class="receipt-detail-line receipt-detail-empty"><span>No line-item detail for this entry.</span></div></div>`;
+    let html = '<div class="receipt-detail">';
+    if (e.notes.length){
+      html += e.notes.map(n => `<div class="receipt-note ${n.level}">${esc(n.text)}</div>`).join('');
     }
+    if (detailLines.length){
+      html += detailLines.map(([label, val]) =>
+        `<div class="receipt-detail-line"><span>${esc(label)}</span><span class="num">${val}</span></div>`
+      ).join('');
+    } else if (!e.notes.length){
+      html += `<div class="receipt-detail-line receipt-detail-empty"><span>No line-item detail for this entry.</span></div>`;
+    }
+    html += '</div>';
+    detailTd.innerHTML = html;
     detailTr.appendChild(detailTd);
     tbody.appendChild(detailTr);
   });
@@ -2014,7 +2093,8 @@ document.getElementById('generateManualBtn').addEventListener('click', () => {
     const hasCashVisa = e.cash > 0 || e.visa > 0;
     const hasCredit = e.creditEvents.length > 0;
     const hasTips = e.tips > 0;
-    return hasPlatform || hasCashVisa || hasCredit || hasTips;
+    const hasNotes = e.notes.length > 0;
+    return hasPlatform || hasCashVisa || hasCredit || hasTips || hasNotes;
   });
   entries.sort((a,b) => a.branch.localeCompare(b.branch) || a.date - b.date);
   parsedEntries = entries;
