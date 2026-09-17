@@ -1277,20 +1277,24 @@ function processWorkbook(wb){
 function parsePlatformSalesRows(rows, entryMap){
   if (!rows || !rows.length) return;
   const headers = rows[0].map(h => String(h||'').trim());
-  const branchIdx = headers.indexOf('Branch');
-  const dateIdx = headers.indexOf('Date');
+  const branchIdx = headers.findIndex(h => h.toLowerCase() === 'branch');
+  const dateIdx = headers.findIndex(h => h.toLowerCase() === 'date');
   if (branchIdx === -1 || dateIdx === -1){
     parseWarnings.push('Platform Sales sheet: missing Branch or Date column — skipped.');
     return;
   }
+  // Match header text case-insensitively — real files vary ("Instashop" vs
+  // "InstaShop", etc.) and a column shouldn't get treated as unconfirmed just
+  // because of capitalization.
+  const headersLower = headers.map(h => h.toLowerCase());
   const platIdx = {};
-  PLATFORM_KEYS.forEach(p => { const i = headers.indexOf(p); if (i>-1) platIdx[p]=i; });
+  PLATFORM_KEYS.forEach(p => { const i = headersLower.indexOf(p.toLowerCase()); if (i>-1) platIdx[p]=i; });
   // Tab 1's Payfort column was renamed "Meal Plan Revenue" in the current template
   // (2026-09-09) but older files may still say "Payfort" — accept either header text,
   // always stored under the internal "Payfort" key so the rest of the code (which
   // reads entry.platformAmounts.Payfort / cfg.platforms.Payfort) needs no changes.
   if (platIdx.Payfort === undefined){
-    const mealIdx = headers.indexOf('Meal Plan Revenue');
+    const mealIdx = headersLower.indexOf('meal plan revenue');
     if (mealIdx > -1) platIdx.Payfort = mealIdx;
   }
 
@@ -1347,6 +1351,15 @@ function parseCashCreditRows(rows, entryMap){
   const idx = {};
   headers.forEach((h,i)=> idx[h]=i);
   const need = ['Branch','Date','Cash','Visa','Credit Card Tips','Entry Type','Customer/Company Name','Amount'];
+  const optional = ['Cash and Visa Meal Plan','Payfort Meal Plan'];
+  // Match header text case-insensitively — real files vary in capitalization —
+  // without disturbing idx['Branch'] etc. lookups used throughout this function.
+  [...need, ...optional].forEach(name => {
+    if (!(name in idx)){
+      const i = headers.findIndex(h => h.toLowerCase() === name.toLowerCase());
+      if (i > -1) idx[name] = i;
+    }
+  });
   const missing = need.filter(c => !(c in idx));
   if (missing.length){
     parseWarnings.push(`Cash Visa Tips Credit sheet: missing column(s) ${missing.join(', ')} — sheet skipped.`);
@@ -1355,9 +1368,9 @@ function parseCashCreditRows(rows, entryMap){
   // Same unconfirmed-column guard as the Platform Sales sheet — flag any extra
   // column (e.g. "Instashop", "Quick Pickup") that carries real amounts instead
   // of silently ignoring it.
-  const knownCols = new Set([...need, 'Cash and Visa Meal Plan', 'Payfort Meal Plan']);
+  const knownColsLower = new Set([...need, ...optional].map(c => c.toLowerCase()));
   headers.forEach((h, i) => {
-    if (!h || knownCols.has(h)) return;
+    if (!h || knownColsLower.has(h.toLowerCase())) return;
     for (let r=1; r<rows.length; r++){
       const v = parseFloat((rows[r]||[])[i]);
       if (v && v>0){
