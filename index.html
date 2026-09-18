@@ -1489,6 +1489,30 @@ function parseCashCreditRows(rows, entryMap){
       }
     }
   }
+
+  // Reconciliation check: the named Cash and Visa Meal Plan + Payfort Meal Plan
+  // breakdown for a branch/day should always sum to exactly that day's Tab 1
+  // Payfort/Meal Plan Revenue total (confirmed 2026-09-09) — the breakdown is
+  // meant to be a per-customer split of that same figure, not extra revenue on
+  // top of it. This used to only be checked way down in buildXMLForCompany,
+  // which only runs after you click Generate — so a mismatch never actually
+  // reached the review screen where the total looked wrong but nothing was
+  // flagged. Moved here so it shows up as a note on the row itself, before
+  // you generate anything.
+  Object.values(entryMap).forEach(entry => {
+    const mealCashEvents = entry.creditEvents.filter(ev=>ev.type==='mealcash');
+    const mealVisaEvents = entry.creditEvents.filter(ev=>ev.type==='mealvisa');
+    if (!mealCashEvents.length && !mealVisaEvents.length) return;
+    const payfortGross = round2(entry.platformAmounts.Payfort || 0);
+    const mealBreakdownTotal = round2(
+      mealCashEvents.reduce((a,ev)=>a+ev.amount,0) + mealVisaEvents.reduce((a,ev)=>a+ev.amount,0)
+    );
+    if (payfortGross === 0){
+      addNote(entry, `Meal Plan named entries found but Tab 1 Payfort/Meal Plan Revenue is blank/zero for this day — the Sales voucher will show no Meal Plan Revenue line even though the Journal will still book these named amounts. Check Tab 1.`);
+    } else if (Math.abs(mealBreakdownTotal - payfortGross) > 0.01){
+      addNote(entry, `Meal Plan breakdown (Cash and Visa Meal Plan + Payfort Meal Plan = ${fmt(mealBreakdownTotal)}) does not match the Tab 1 Payfort/Meal Plan Revenue total (${fmt(payfortGross)}) — off by ${fmt(round2(mealBreakdownTotal - payfortGross))}. These should always reconcile exactly — check the sheet before generating. The total shown for this row uses the Tab 1 figure (${fmt(payfortGross)}), not the breakdown, so it may understate or overstate actual revenue until this is fixed.`);
+    }
+  });
 }
 
 // ==============================================================
@@ -1748,17 +1772,9 @@ function buildXMLForCompany(company, entries){
     if (payfortGross > 0){
       salesLines.push({ledger: cfg.platforms.Payfort.sales, net: round2(payfortGross/(1+VAT_RATE)), gross: payfortGross});
     }
-    // Reconciliation check: the named Tab 2 breakdown should always sum to exactly
-    // the Tab 1 Payfort total. A mismatch means a data-entry issue in the sheet —
-    // flag it rather than silently trusting either number.
-    const mealBreakdownTotal = round2(
-      mealCashEvents.reduce((a,ev)=>a+ev.amount,0) + mealVisaEvents.reduce((a,ev)=>a+ev.amount,0)
-    );
-    if ((mealCashEvents.length || mealVisaEvents.length) && Math.abs(mealBreakdownTotal - payfortGross) > 0.01){
-      parseWarnings.push(`${entry.branch}, ${displayDate(entry.date)}: Meal Plan breakdown (Cash and Visa Meal Plan + Payfort Meal Plan = ${fmt(mealBreakdownTotal)}) does not match the Tab 1 Payfort total (${fmt(payfortGross)}) — check the sheet, this should always reconcile exactly.`);
-    } else if ((mealCashEvents.length || mealVisaEvents.length) && payfortGross === 0){
-      parseWarnings.push(`${entry.branch}, ${displayDate(entry.date)}: Meal Plan named entries found (Taha/Youseff-style rows) but Tab 1 Payfort is blank/zero — Sales voucher will show no Meal Plan Revenue line even though Journal will book these amounts. Check Tab 1.`);
-    }
+    // (Reconciliation between the Tab 2 named breakdown and the Tab 1 Payfort
+    // total is now checked up in parseCashCreditRows, right after parsing —
+    // as a note on the row itself, visible in review before you ever get here.)
     const directGross = round2(entry.cash + entry.visa + entry.creditEvents.filter(ev=>ev.type==='new').reduce((a,ev)=>a+ev.amount,0));
     if (directGross > 0){
       salesLines.push({ledger: cfg.directOrder.salesLedger, net: round2(directGross/(1+VAT_RATE)), gross: directGross});
