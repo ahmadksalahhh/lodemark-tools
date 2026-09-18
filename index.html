@@ -1553,22 +1553,10 @@ function showPreview(entries, warnings){
   entries.forEach((e, idx) => {
     const gross = grossTotalOf(e);
     grand += gross;
-    const hasWarn = e.notes.some(n => n.level === 'warn');
-    const hasInfo = !hasWarn && e.notes.some(n => n.level === 'info');
-
-    // ---- collapsed summary row: date, restaurant, amount, expand arrow ----
-    // A small dot on the arrow marks a row that has something worth checking,
-    // so you don't have to expand every row to find the ones that need a look.
-    const tr = document.createElement('tr');
     const stripe = idx % 2 === 1 ? ' stripe' : '';
-    tr.className = 'receipt-row' + stripe + (hasWarn ? ' has-warn' : hasInfo ? ' has-info' : '');
-    tr.setAttribute('data-idx', String(idx));
-    const dot = hasWarn ? '<span class="note-dot warn" title="Something was left out — check details"></span>'
-      : hasInfo ? '<span class="note-dot info" title="A branch name was auto-matched — check details"></span>' : '';
-    tr.innerHTML = `<td class="receipt-arrow-cell"><button type="button" class="arrow-btn" aria-expanded="false" aria-label="Show receipt details">${dot}<svg viewBox="0 0 20 20" width="14" height="14"><path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button></td><td>${displayDate(e.date)}</td><td>${esc(e.branch)}</td><td class="num">${fmt(gross)}</td>`;
-    tbody.appendChild(tr);
 
-    // ---- expanded detail row: notes (matched/left-out) + full receipt breakdown ----
+    // ---- build the detail lines (and any notes they surface) first, so the
+    // collapsed row's warning dot below reflects the complete, final note list ----
     const detailLines = [];
     Object.keys(e.platformAmounts).forEach(p => {
       detailLines.push([p, fmt(e.platformAmounts[p])]);
@@ -1580,10 +1568,39 @@ function showPreview(entries, warnings){
     const payments = e.creditEvents.filter(ev=>ev.type==='payment');
     const mealCash = e.creditEvents.filter(ev=>ev.type==='mealcash');
     const mealVisa = e.creditEvents.filter(ev=>ev.type==='mealvisa');
-    newCredit.forEach(ev => detailLines.push([`New credit sale — ${ev.name}`, fmt(ev.amount)]));
-    payments.forEach(ev => detailLines.push([`Payment received — ${ev.name}`, fmt(ev.amount)]));
-    mealCash.forEach(ev => detailLines.push([`Cash and Visa Meal Plan — ${ev.name}`, fmt(ev.amount)]));
-    mealVisa.forEach(ev => detailLines.push([`Payfort Meal Plan — ${ev.name}`, fmt(ev.amount)]));
+    // Bill reference type as it will actually be booked in Tally — matches the
+    // logic in buildXMLForCompany exactly, so what you see here is what you get:
+    // "New credit sale" follows the branch's own refStyle (Agst Ref for Alqouz
+    // gym, New Ref elsewhere), but "Payment received" is always Agst Ref (you're
+    // always paying down an existing running balance), and the Meal Plan lines
+    // are always New Ref.
+    const cfgForRef = BRANCHES[e.branch];
+    const newCreditRefStyle = (cfgForRef.creditSales && cfgForRef.creditSales.refStyle === 'agst') ? 'Agst Ref' : 'New Ref';
+    const nameTag = (ev) => {
+      const {name, confirmed} = lookupCustomerName(cfgForRef, ev.name);
+      if (!confirmed){
+        addNote(e, `Customer name "${ev.name}" not in the confirmed name list for this branch — used as typed, please confirm.`, 'info');
+        return '';
+      }
+      return name !== ev.name ? ` (as "${name}")` : '';
+    };
+    newCredit.forEach(ev => detailLines.push([`New credit sale — ${ev.name}${nameTag(ev)} · ${newCreditRefStyle}`, fmt(ev.amount)]));
+    payments.forEach(ev => detailLines.push([`Payment received — ${ev.name}${nameTag(ev)} · Agst Ref`, fmt(ev.amount)]));
+    mealCash.forEach(ev => detailLines.push([`Cash and Visa Meal Plan — ${ev.name} · New Ref`, fmt(ev.amount)]));
+    mealVisa.forEach(ev => detailLines.push([`Payfort Meal Plan — ${ev.name} · New Ref`, fmt(ev.amount)]));
+
+    // ---- collapsed summary row: date, restaurant, amount, expand arrow ----
+    // A small dot on the arrow marks a row that has something worth checking,
+    // so you don't have to expand every row to find the ones that need a look.
+    const hasWarn = e.notes.some(n => n.level === 'warn');
+    const hasInfo = !hasWarn && e.notes.some(n => n.level === 'info');
+    const tr = document.createElement('tr');
+    tr.className = 'receipt-row' + stripe + (hasWarn ? ' has-warn' : hasInfo ? ' has-info' : '');
+    tr.setAttribute('data-idx', String(idx));
+    const dot = hasWarn ? '<span class="note-dot warn" title="Something was left out — check details"></span>'
+      : hasInfo ? '<span class="note-dot info" title="Something worth a quick look — check details"></span>' : '';
+    tr.innerHTML = `<td class="receipt-arrow-cell"><button type="button" class="arrow-btn" aria-expanded="false" aria-label="Show receipt details">${dot}<svg viewBox="0 0 20 20" width="14" height="14"><path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button></td><td>${displayDate(e.date)}</td><td>${esc(e.branch)}</td><td class="num">${fmt(gross)}</td>`;
+    tbody.appendChild(tr);
 
     const detailTr = document.createElement('tr');
     detailTr.className = 'receipt-detail-row' + stripe;
@@ -2072,17 +2089,27 @@ const BRANCH_ALIASES = {
 // Falls through to the trimmed raw name — with a warning pushed to
 // parseWarnings — if nothing in the alias map matches, so an unrecognized
 // name is surfaced for review rather than silently misfiled.
-function normalizeCustomerName(cfg, rawName){
+// Looks up the canonical Agst Ref name without any side effects (no warning
+// push) — safe to call repeatedly just to render a preview. Returns
+// {name, confirmed}; confirmed:false means it fell through to "used as-is".
+function lookupCustomerName(cfg, rawName){
   const raw = String(rawName || '').trim();
   const aliases = cfg.creditSales && cfg.creditSales.nameAliases;
-  if (!aliases) return raw;
+  if (!aliases) return {name: raw, confirmed: true};
   const lower = raw.toLowerCase();
-  if (aliases[lower]) return aliases[lower];
+  if (aliases[lower]) return {name: aliases[lower], confirmed: true};
   for (const key in aliases){
-    if (lower.includes(key)) return aliases[key];
+    if (lower.includes(key)) return {name: aliases[key], confirmed: true};
   }
-  parseWarnings.push(`Customer name "${raw}" not in the confirmed name list for this branch — used as-is, please confirm.`);
-  return raw;
+  return {name: raw, confirmed: false};
+}
+
+function normalizeCustomerName(cfg, rawName){
+  const {name, confirmed} = lookupCustomerName(cfg, rawName);
+  if (!confirmed){
+    parseWarnings.push(`Customer name "${String(rawName||'').trim()}" not in the confirmed name list for this branch — used as-is, please confirm.`);
+  }
+  return name;
 }
 
 // Word-level, order-independent, typo-tolerant branch matching. Each input token
