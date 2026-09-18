@@ -1087,7 +1087,7 @@ const DEFAULT_BRANCHES = {
     },
     creditSales: {
       journalLedger: "Other Credit Sales Branch - 3 Qouz",
-      knownNames: ["Haitham","Guido","Daniel","Humaid Altayer","reyhan"],
+      knownNames: ["Haitham","Guido","Daniel","Humaid Altayer","reyhan","M.Atef Elesaad"],
       // Raw names as they appear on the daily sheet, normalized to one canonical
       // name per person so every "New Credit Sale" and "Payment Received" for
       // that person lands on the SAME Agst Ref bill in Tally, instead of a new
@@ -1099,11 +1099,20 @@ const DEFAULT_BRANCHES = {
         "mr.haitham belhasa": "Haitham",
         "haitham": "Haitham",
         "reyhan": "reyhan",
-        "humaid altayer": "Humaid Altayer"
+        "humaid altayer": "Humaid Altayer",
+        // Confirmed 2026-09-18 (Ahmad): already has an existing account in Tally.
+        "m.atef elesaad": "M.Atef Elesaad"
       },
       // Confirmed 2026-08-24 (Ahmad): gym credit-sale Dr lines use Agst Ref
       // (not New Ref) so each named customer accumulates one running balance
       // instead of a separate dated bill per transaction.
+      //
+      // Confirmed 2026-09-18 (Ahmad): this only applies once the customer
+      // already has an account in Tally, i.e. their name is in nameAliases
+      // above. A name that ISN'T confirmed yet (e.g. "George hajjar" as of
+      // 2026-09-18) books as New Ref instead — same as Tally itself would do
+      // for someone with no existing ledger — until the name is added here,
+      // at which point it switches to Agst Ref automatically.
       refStyle: "agst"
     }
   },
@@ -1587,7 +1596,6 @@ function showPreview(entries, warnings){
     // always paying down an existing running balance), and the Meal Plan lines
     // are always New Ref.
     const cfgForRef = BRANCHES[e.branch];
-    const newCreditRefStyle = (cfgForRef.creditSales && cfgForRef.creditSales.refStyle === 'agst') ? 'Agst Ref' : 'New Ref';
     const nameTag = (ev) => {
       const {name, confirmed} = lookupCustomerName(cfgForRef, ev.name);
       if (!confirmed){
@@ -1596,7 +1604,14 @@ function showPreview(entries, warnings){
       }
       return name !== ev.name ? ` (as "${name}")` : '';
     };
-    newCredit.forEach(ev => detailLines.push([`New credit sale — ${ev.name}${nameTag(ev)} · ${newCreditRefStyle}`, fmt(ev.amount)]));
+    // "New credit sale" ref style follows the branch's own refStyle (Agst Ref for
+    // Alqouz gym), but ONLY once the customer is a confirmed account — an
+    // unconfirmed name books as New Ref instead, same as buildXMLForCompany.
+    const newCreditRefStyle = (ev) => {
+      const {confirmed} = lookupCustomerName(cfgForRef, ev.name);
+      return (cfgForRef.creditSales && cfgForRef.creditSales.refStyle === 'agst' && confirmed) ? 'Agst Ref' : 'New Ref';
+    };
+    newCredit.forEach(ev => detailLines.push([`New credit sale — ${ev.name}${nameTag(ev)} · ${newCreditRefStyle(ev)}`, fmt(ev.amount)]));
     payments.forEach(ev => detailLines.push([`Payment received — ${ev.name}${nameTag(ev)} · Agst Ref`, fmt(ev.amount)]));
     mealCash.forEach(ev => detailLines.push([`Cash and Visa Meal Plan — ${ev.name} · New Ref`, fmt(ev.amount)]));
     mealVisa.forEach(ev => detailLines.push([`Payfort Meal Plan — ${ev.name} · New Ref`, fmt(ev.amount)]));
@@ -1858,9 +1873,13 @@ function buildXMLForCompany(company, entries){
     // new credit sale Dr lines, one per customer
     entry.creditEvents.filter(ev=>ev.type==='new').forEach(ev => {
       const custName = normalizeCustomerName(cfg, ev.name);
-      if (cfg.creditSales.refStyle === 'agst'){
+      const { confirmed } = lookupCustomerName(cfg, ev.name);
+      if (cfg.creditSales.refStyle === 'agst' && confirmed){
         // Running-balance style (e.g. Alqouz gym): every entry for this person
-        // lands on the same Agst Ref bill instead of a new dated one.
+        // lands on the same Agst Ref bill instead of a new dated one — but only
+        // once they're a confirmed account (in nameAliases). An unconfirmed name
+        // falls through to New Ref below, same as Tally itself would do for
+        // someone with no existing ledger yet.
         drLine(cfg.creditSales.journalLedger, ev.amount, custName, 'Agst Ref');
       } else {
         drLine(cfg.creditSales.journalLedger, ev.amount, `${rd} ${custName}`);
