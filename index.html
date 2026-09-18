@@ -1184,7 +1184,19 @@ function renderBranchList(){
 renderBranchList();
 
 function parseDate(v){
-  if (v instanceof Date) return v;
+  if (v instanceof Date) {
+    // SheetJS (cellDates:true) builds Date objects for genuine Excel date
+    // cells so their LOCAL calendar day matches the spreadsheet's date —
+    // but Excel stores dates as floating-point day-serials, and that
+    // float math can land a few seconds either side of local midnight.
+    // In most timezones that's harmless, but it can round the date down
+    // to the PREVIOUS day and silently merge two different days' rows
+    // into one entry. Push well into the day (12h, far more than the
+    // rounding noise) before reading the local date, so this is safe in
+    // every timezone.
+    const nudged = new Date(v.getTime() + 12*60*60*1000);
+    return new Date(Date.UTC(nudged.getFullYear(), nudged.getMonth(), nudged.getDate()));
+  }
   if (typeof v === 'number') {
     const epoch = new Date(Date.UTC(1899,11,30));
     return new Date(epoch.getTime() + v*86400000);
