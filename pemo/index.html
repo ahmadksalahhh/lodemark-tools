@@ -222,6 +222,7 @@
     margin-bottom:14px;
     overflow:hidden;
   }
+  .entry.has-mismatch{ border-color:var(--rust); border-left-width:3px; }
   .entry-head{
     display:flex; justify-content:space-between; align-items:center;
     background:#F3F0E6;
@@ -942,6 +943,7 @@ function renderPreview(){
 
   let unknownCats = new Set();
   let badDateEntries = [];
+  let mismatchEntries = [];
   const byPaymentLedger = new Map(); // "ledger||date" -> { ledgerName, dateDisplay, total, invoices: [] }
 
   parsedEntries.forEach((entry, i) => {
@@ -963,7 +965,7 @@ function renderPreview(){
     bucket.invoices.push(entry.invoice);
 
     const div = document.createElement('div');
-    div.className = 'entry';
+    div.className = 'entry' + (entry.totalMismatch ? ' has-mismatch' : '');
     const linesHtml = entry.lines.map(l => {
       const flagged = l.category && !getKnownCategories().has(l.category);
       if(flagged) unknownCats.add(l.category);
@@ -983,6 +985,7 @@ function renderPreview(){
     const mismatchHtml = entry.totalMismatch
       ? `<div class="mismatch-line">⚠ Declared Total Invoice Amount (AED ${money(entry.totalMismatch.declared)}) doesn't match the sum of this invoice's lines (AED ${money(entry.totalMismatch.computed)}) — check for a typo or a missing/extra line.</div>`
       : '';
+    if(entry.totalMismatch) mismatchEntries.push(entry.num);
 
     div.innerHTML = `
       <div class="entry-head">
@@ -997,6 +1000,12 @@ function renderPreview(){
 
   if(badDateEntries.length){
     warnEl.innerHTML = `<div class="banner warn"><span>⚠️</span><span><b>Payment date missing or unrecognized on entr${badDateEntries.length>1?'ies':'y'} #${badDateEntries.map(n=>escXml(String(n))).join(', #')}.</b> Nothing was substituted — fix the date cell(s) in your source and re-paste before downloading, or this voucher's date will be wrong or blank in Tally.</span></div>`;
+  } else if(mismatchEntries.length){
+    // Same idea as the Lodemark sales tool's summary boxes: a real, checkable
+    // problem (declared total vs. actual line sum not matching) must be visible
+    // up top, not just buried inside one entry's card where it's easy to miss
+    // if you don't scroll through every entry.
+    warnEl.innerHTML = `<div class="banner warn"><span>⚠️</span><span><b>Total Invoice Amount doesn't match the line items on entr${mismatchEntries.length>1?'ies':'y'} #${mismatchEntries.map(n=>escXml(String(n))).join(', #')}.</b> Check each flagged entry below for the exact numbers — this usually means a typo or a missing/extra line, and it's worth fixing before this goes to Tally.</span></div>`;
   } else if(unknownCats.size){
     warnEl.innerHTML = `<div class="banner warn"><span>⚠️</span><span><b>${unknownCats.size} category name${unknownCats.size>1?'s':''} not found</b> in the known chart of accounts: ${[...unknownCats].map(c=>escXml(c)).join(', ')}. Double-check spelling against Tally before importing — a mismatch here is what causes "Referenced master is missing" errors.</span></div>`;
   } else {
