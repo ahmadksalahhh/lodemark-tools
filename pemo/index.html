@@ -764,24 +764,32 @@ document.getElementById('parseBtn').addEventListener('click', () => {
     // but never silently guesses: it tries exact match first, then "starts
     // with", then "contains", and returns -1 (genuinely not found) only if
     // none of those match anything.
-    function findCol(candidates){
+    // `exclude` lets a candidate list's generic fallback (e.g. bare "date") skip
+    // columns that belong to a DIFFERENT, more specific field — without this,
+    // voucherDate's fallback search for any column merely containing "date"
+    // could grab the Invoice Date column instead (since "invoice date" also
+    // contains "date"), silently using the wrong date with no warning at all.
+    // Bug found 2026-09-19 (Ahmad): Payment Date showed as the Invoice Date
+    // value on the review screen.
+    function findCol(candidates, exclude){
+      const excluded = h => (exclude || []).some(x => h.includes(x));
       for(const want of candidates){
         const exact = header.indexOf(want);
         if(exact > -1) return exact;
       }
       for(const want of candidates){
-        const starts = header.findIndex(h => h.startsWith(want));
+        const starts = header.findIndex(h => h.startsWith(want) && !excluded(h));
         if(starts > -1) return starts;
       }
       for(const want of candidates){
-        const has = header.findIndex(h => h.includes(want));
+        const has = header.findIndex(h => h.includes(want) && !excluded(h));
         if(has > -1) return has;
       }
       return -1;
     }
     const idx = {
       entryNum: findCol(['petty cash entry #', 'entry #', 'entry number']),
-      voucherDate: findCol(['payment date', 'date']),
+      voucherDate: findCol(['payment date', 'date'], ['invoice']),
       invoiceDate: findCol(['invoice date']),
       invoice: findCol(['invoice number']),
       vendor: findCol(['vendor name', 'vendor']),
