@@ -852,12 +852,8 @@ document.getElementById('parseBtn').addEventListener('click', () => {
       // line, all carrying forward the last real vendor and invoice number.
       const catCellCheck = idx.account > -1 ? String(r[idx.account] || '').trim() : '';
       const descCellCheck = idx.desc > -1 ? String(r[idx.desc] || '').trim() : '';
-      const itemAmtCellCheck = idx.itemAmount > -1 ? String(r[idx.itemAmount] ?? '').trim() : '';
-      const totalAmtCellCheck = idx.totalAmount > -1 ? String(r[idx.totalAmount] ?? '').trim() : '';
-      const hasLineItemContent = catCellCheck !== '' || descCellCheck !== '' ||
-        (itemAmtCellCheck !== '' && parseFloat(itemAmtCellCheck) !== 0 && !isNaN(parseFloat(itemAmtCellCheck))) ||
-        (totalAmtCellCheck !== '' && parseFloat(totalAmtCellCheck) !== 0 && !isNaN(parseFloat(totalAmtCellCheck)));
-      if(!hasLineItemContent) continue; // no real line-item data on this row - not an invoice line, skip it entirely (don't touch carry state)
+      const hasLineItemContent = catCellCheck !== '' || descCellCheck !== '';
+      if(!hasLineItemContent) continue; // no real Category/Description on this row - not an invoice line (could be the Totals row or template text), skip it entirely (don't touch carry state)
 
       const entryNumRaw = (idx.entryNum > -1 && r[idx.entryNum]) ? String(r[idx.entryNum]).trim() : '';
       if(entryNumRaw) carry.entryNum = entryNumRaw;
