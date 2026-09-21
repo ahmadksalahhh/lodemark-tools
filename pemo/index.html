@@ -838,6 +838,27 @@ document.getElementById('parseBtn').addEventListener('click', () => {
       const descCellForStopCheck = idx.desc > -1 ? String(r[idx.desc] || '').trim().toUpperCase() : '';
       if(descCellForStopCheck === 'TOTAL') break;
 
+      // A genuine invoice line always carries real line-item content - a
+      // Category, an Item Description, or a nonzero Item/Total Amount.
+      // Template boilerplate below the real data (Legend, instructions, or
+      // any stray formatted row) can still have text somewhere in the row
+      // (often the leftmost cell, which happens to be the Entry # column)
+      // but never any of these - so require at least one before treating a
+      // row as data. Without this, a sheet that lacks a literal "TOTAL" row
+      // (the stop-check above isn't guaranteed to exist in every copy of the
+      // template) lets the loop wander into Legend text, which reads as a
+      // non-blank Entry # every time and overwrites carry.entryNum with
+      // garbage - creating a new phantom, empty invoice entry per legend
+      // line, all carrying forward the last real vendor and invoice number.
+      const catCellCheck = idx.account > -1 ? String(r[idx.account] || '').trim() : '';
+      const descCellCheck = idx.desc > -1 ? String(r[idx.desc] || '').trim() : '';
+      const itemAmtCellCheck = idx.itemAmount > -1 ? String(r[idx.itemAmount] ?? '').trim() : '';
+      const totalAmtCellCheck = idx.totalAmount > -1 ? String(r[idx.totalAmount] ?? '').trim() : '';
+      const hasLineItemContent = catCellCheck !== '' || descCellCheck !== '' ||
+        (itemAmtCellCheck !== '' && parseFloat(itemAmtCellCheck) !== 0 && !isNaN(parseFloat(itemAmtCellCheck))) ||
+        (totalAmtCellCheck !== '' && parseFloat(totalAmtCellCheck) !== 0 && !isNaN(parseFloat(totalAmtCellCheck)));
+      if(!hasLineItemContent) continue; // no real line-item data on this row - not an invoice line, skip it entirely (don't touch carry state)
+
       const entryNumRaw = (idx.entryNum > -1 && r[idx.entryNum]) ? String(r[idx.entryNum]).trim() : '';
       if(entryNumRaw) carry.entryNum = entryNumRaw;
 
